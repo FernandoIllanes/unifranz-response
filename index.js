@@ -1,7 +1,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const http = require('http');
-const port = 3000;
+const port = 3001;
 
 const client = new Client({
     authStrategy: new LocalAuth(),
@@ -97,5 +97,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, () => {
-    console.log('Servidor escuchando en http://localhost:3000');
+    console.log('Servidor escuchando en http://localhost:3001');
 });
