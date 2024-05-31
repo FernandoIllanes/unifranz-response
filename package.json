@@ -22,13 +22,12 @@
     "fileupload": "^0.2.1",
     "jest": "^28.0.3",
     "jimp": "^0.16.1",
-    "link-preview-js": "^2.1.13",
+    "link-preview-js": "^3.0.0",
     "nodemon": "^2.0.16",
     "pino": "^9.1.0",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
     "request": "^2.88.2",
-    "sharp": "^0.33.4",
     "socket.io": "^4.7.5"
   }
 }
