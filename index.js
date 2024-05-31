@@ -23,7 +23,7 @@ app.use('/assets', express.static(__dirname + '/client/assets'));
 
 const server = http.createServer(app);
 const io = socketIO(server);
-const port = process.env.PORT || 8000;
+const port = process.env.PORT || 5000;
 
 app.get('/scan', (req, res) => {
     res.sendFile('./client/index.html', { root: __dirname });
