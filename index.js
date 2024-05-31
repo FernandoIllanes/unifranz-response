@@ -4,11 +4,14 @@ const {
     useMultiFileAuthState,
 } = require('@whiskeysockets/baileys');
 
+const pino = require('pino');
+const { Boom } = require('@hapi/boom');
 const express = require('express');
 const fileUpload = require('express-fileupload');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const http = require('http');
+const qrcode = require('qrcode');
 const socketIO = require('socket.io');
 
 const app = express();
@@ -38,6 +41,7 @@ async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('session_auth_info');
     sock = makeWASocket({
         auth: state,
+        logger: pino({ level: 'silent' }),
         version: [2, 2413, 1]
     });
 
