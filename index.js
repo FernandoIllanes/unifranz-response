@@ -49,7 +49,7 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         qrDinamic = qr;
         if (connection === 'close') {
-            let reason = new DisconnectReason(lastDisconnect.error).toString();
+            let reason = new Boom(lastDisconnect.error).output.statusCode;
             if (reason === DisconnectReason.badSession) {
                 console.log(`Bad Session File, Please Delete session_auth_info and Scan Again`);
                 sock.logout();
