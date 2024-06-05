@@ -4,6 +4,7 @@ const {
     useMultiFileAuthState,
 } = require('@whiskeysockets/baileys');
 
+const fs = require('fs');
 const pino = require('pino');
 const { Boom } = require('@hapi/boom');
 const express = require('express');
@@ -33,50 +34,73 @@ app.get('/', (req, res) => {
     res.send('server working');
 });
 
-let sock;
-let qrDinamic;
-let soket;
+// Cargar sesiones desde el archivo
+let sessions = loadSessionsFromFile(); // Almacenar las sesiones
+let qrCodes = {}; // Almacenar los QR dinámicos
+let socks = {};
 
-async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('session_auth_info');
-    sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true,
-        logger: pino({ level: 'silent' }),
-        version: [2, 2413, 1]
-    });
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        qrDinamic = qr;
-        if (connection === 'close') {
-            let reason = new Boom(lastDisconnect.error).output.statusCode;
-            if (reason === DisconnectReason.badSession) {
-                console.log(`Bad Session File, Please Delete session_auth_info and Scan Again`);
-                sock.logout();
-            } else if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.connectionReplaced, DisconnectReason.loggedOut, DisconnectReason.restartRequired, DisconnectReason.timedOut].includes(reason)) {
-                console.log(`Connection closed, reconnecting due to reason: ${reason}`);
-                connectToWhatsApp();
-            } else {
-                console.log(`Unknown disconnect reason: ${reason}`);
-            }
-        } else if (connection === 'open') {
-            console.log('Connection open');
-            updateQR('connected');
-        }
-    });
-
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type === 'notify') {
-            console.log('Mensaje entrante recibido');
-        }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
+function loadSessionsFromFile() {
+    try {
+        const data = fs.readFileSync('sessions.json', 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error('Error loading sessions from file:', error);
+        return {};
+    }
 }
 
-const isConnected = () => {
-    return !!sock?.user;
+function saveSessionsToFile() {
+    fs.writeFileSync('sessions.json', JSON.stringify(sessions, null, 2), 'utf8');
+}
+
+const connectToWhatsApp = async (sessionId) => {
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(`session_auth_info_${sessionId}`);
+        const sock = makeWASocket({
+            auth: state,
+            printQRInTerminal: false,
+            logger: pino({ level: 'silent' }),
+            version: [2, 2413, 1],
+        });
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            qrCodes[sessionId] = qr;
+            if (connection === 'close') {
+                let reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+                console.log(`Connection closed, reconnecting due to reason: ${reason}`);
+                if (reason === DisconnectReason.badSession) {
+                    console.log(`Bad Session File, Please Delete session_auth_info_${sessionId} and Scan Again`);
+                    sock.logout();
+                } else if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.connectionReplaced, DisconnectReason.loggedOut, DisconnectReason.restartRequired, DisconnectReason.timedOut].includes(reason)) {
+                    await connectToWhatsApp(sessionId);
+                } else {
+                    console.log(`Unknown disconnect reason: ${reason}`);
+                }
+            } else if (connection === 'open') {
+                console.log(`Connection open for session: ${sessionId}`);
+                updateQR('connected', sessionId);
+                sessions[sessionId] = { user: sock.user };
+                saveSessionsToFile();
+            }
+        });
+
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type === 'notify') {
+                //console.log('Mensaje entrante recibido');
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        socks[sessionId] = sock;
+    } catch (error) {
+        console.error('Error connecting to WhatsApp:', error);
+    }
+};
+
+const isConnected = (sessionId) => {
+    return !!sessions[sessionId]?.user;
 };
 
 function buildMessageTemplate(template, data) {
@@ -84,15 +108,23 @@ function buildMessageTemplate(template, data) {
 }
 
 app.post('/send-message', async (req, res) => {
-    console.log('Hola desde el send-message');
     try {
         const reqData = req.body;
+        const sessionId = reqData.session_id;
         let contactId;
+        if (!socks[sessionId]) {
+            await connectToWhatsApp(sessionId);
+        }
+
+        if (!isConnected(sessionId)) {
+            res.status(400).json({ status: 'error', message: 'Sesión no conectada' });
+            return;
+        }
 
         if (reqData.contact_type === 'group') {
             contactId = reqData.contact_id + '@g.us';
         } else if (reqData.contact_type === 'contact') {
-            contactId = reqData.contact_id.replace(/\+/g, "") + '@s.whatsapp.net';
+            contactId = reqData.contact_id.replace(/\+/g, '') + '@s.whatsapp.net';
         }
 
         let messageOptions;
@@ -106,8 +138,16 @@ app.post('/send-message', async (req, res) => {
             return;
         }
 
-        await sock.sendMessage(contactId, messageOptions);
-
+        console.log('1');
+        console.log(contactId);
+        console.log('2');
+        console.log(messageOptions);
+        await socks[sessionId].sendMessage(contactId, messageOptions)
+            .catch(error => {
+                console.error('Error sending message:', error);
+                throw error;
+            });
+        
         res.status(200).json({ status: 'success', message: 'Mensaje enviado correctamente' });
     } catch (error) {
         console.error('Error procesando la solicitud:', error);
@@ -116,32 +156,74 @@ app.post('/send-message', async (req, res) => {
 });
 
 io.on('connection', (socket) => {
-    soket = socket;
-    if (isConnected()) {
-        updateQR('connected');
-    } else if (qrDinamic) {
-        updateQR('qr');
-    }
+    // Enviar sesiones existentes al cliente
+    socket.emit('sessions', Object.keys(sessions).map(sessionId => ({
+        sessionId,
+        user: sessions[sessionId]?.user
+    })));
+
+    socket.on('start-session', (sessionId) => {
+        if (!sessions[sessionId]) {
+            connectToWhatsApp(sessionId).catch((err) => console.log('Error inesperado: ' + err));
+        }
+    });
+
+    socket.on('get-qr', (sessionId) => {
+        if (qrCodes[sessionId]) {
+            qrcode.toDataURL(qrCodes[sessionId], (err, url) => {
+                socket.emit('qr', { sessionId, url });
+                socket.emit('log', `QR recibido para la sesión ${sessionId}, escanear con WhatsApp`);
+            });
+        } else {
+            socket.emit('log', 'Esperando a generar el QR...');
+        }
+    });
+
+    socket.on('check-status', (sessionId) => {
+        if (isConnected(sessionId)) {
+            updateQR('connected', sessionId);
+        } else if (qrCodes[sessionId]) {
+            updateQR('qr', sessionId);
+        }
+    });
 });
 
-const updateQR = (data) => {
+const updateQR = (data, sessionId) => {
     if (data === 'qr') {
-        qrcode.toDataURL(qrDinamic, (err, url) => {
-            soket?.emit('qr', url);
-            soket?.emit('log', 'QR recibido, escanear con WhatsApp');
+        qrcode.toDataURL(qrCodes[sessionId], (err, url) => {
+            io.emit('qr', { sessionId, url });
+            io.emit('log', `QR recibido para la sesión ${sessionId}, escanear con WhatsApp`);
         });
     } else if (data === 'connected') {
-        soket?.emit('qrstatus', './assets/check.svg');
-        soket?.emit('log', 'Usuario conectado');
-        const { id, name } = sock?.user;
-        soket?.emit('user', `${id} ${name}`);
+        io.emit('qrstatus', { sessionId, status: './assets/check.svg' });
+        io.emit('log', `Usuario conectado en la sesión ${sessionId}`);
+        const { id, name } = sessions[sessionId]?.user || {};
+        if (id && name) {
+            io.emit('user', { sessionId, user: `${id} ${name}` });
+        } else {
+            io.emit('user', { sessionId, user: 'Unknown User' });
+        }
     } else if (data === 'loading') {
-        soket?.emit('qrstatus', './assets/loader.gif');
-        soket?.emit('log', 'Cargando...');
+        io.emit('qrstatus', { sessionId, status: './assets/loader.gif' });
+        io.emit('log', `Cargando sesión ${sessionId}...`);
     }
 };
 
-connectToWhatsApp().catch((err) => console.log('Error inesperado: ' + err));
-server.listen(port, () => {
+const startAllSessions = async () => {
+    for (const sessionId of Object.keys(sessions)) {
+        await connectToWhatsApp(sessionId);
+    }
+};
+
+server.listen(port, async () => {
     console.log(`Servidor escuchando en http://localhost:${port}`);
+    await startAllSessions();
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception thrown:', error);
 });

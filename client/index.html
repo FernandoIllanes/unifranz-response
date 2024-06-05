@@ -1,122 +1,156 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<title>wa api test demo</title>
-	<meta name="description" content="WhatsApp Api otomatis.">
+    <title>WhatsApp Multi-Session Bot</title>
+    <meta name="description" content="WhatsApp Multi-Session Bot">
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, user-scalable=yes">
     <style>
-body{
-    background: rgb(200, 220, 224);
-}
+        body {
+            background: rgb(200, 220, 224);
+        }
         .form {
-  font-family: Helvetica, sans-serif;
-  max-width: 400px;
-  margin: 100px auto;
-  text-align: center;
-  padding: 16px;
-  background: #ffffff;
-}
-.form h1 {
-  background: #03773f;
-  padding: 20px 0;
-  font-weight: 300;
-  text-align: center;
-  color: #fff;
-  margin: -16px -16px 16px -16px;
-  font-size:  25px;
-}
-.form input[type="text"],
-.form input[type="url"] {
-  box-sizing: border-box;
-  width: 100%;
-  background: #fff;
-  margin-bottom: 4%;
-  border: 1px solid #ccc;
-  padding: 4%;
-  font-size: 17px;
-  color: rgb(9, 61, 125);
-}
-.form input[type="text"]:focus,
-.form input[type="url"]:focus {
-  box-shadow: 0 0 5px #5868bf;
-  padding: 4%;
-  border: 1px solid #5868bf;
-}
-
-.form button {
-  box-sizing: border-box;
-  -webkit-box-sizing: border-box;
-  -moz-box-sizing: border-box;
-  width: 180px;
-  margin: 0 auto;
-  padding: 3%;
-  background: #0853b6;
-  border: none;  
-  border-radius: 3px;
-  font-size: 17px;
-  border-top-style: none;
-  border-right-style: none;
-  border-left-style: none;
-  color: #fff;
-  cursor: pointer;
-}
-.form button:hover {
-  background: rgba(88,104,191, 0.5);
-}
-
-.qrcode{
-  padding: 16px;
-  margin-bottom: 30px;
-}
-.qrcode img{
-  margin: 0 auto;
-  box-shadow: 0 0 10px rgba(67, 67, 68, 0.25);
-  padding: 4px;
-}
-
+            font-family: Helvetica, sans-serif;
+            max-width: 600px;
+            margin: 20px auto;
+            text-align: center;
+            padding: 16px;
+            background: #ffffff;
+        }
+        .form h1 {
+            background: #03773f;
+            padding: 20px 0;
+            font-weight: 300;
+            text-align: center;
+            color: #fff;
+            margin: -16px -16px 16px -16px;
+            font-size: 25px;
+        }
+        .form input[type="text"],
+        .form input[type="url"] {
+            box-sizing: border-box;
+            width: 100%;
+            background: #fff;
+            margin-bottom: 4%;
+            border: 1px solid #ccc;
+            padding: 4%;
+            font-size: 17px;
+            color: rgb(9, 61, 125);
+        }
+        .form button {
+            box-sizing: border-box;
+            -webkit-box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            width: 180px;
+            margin: 0 auto;
+            padding: 3%;
+            background: #0853b6;
+            border: none;  
+            border-radius: 3px;
+            font-size: 17px;
+            border-top-style: none;
+            border-right-style: none;
+            border-left-style: none;
+            color: #fff;
+            cursor: pointer;
+          }
+        .form button:hover {
+            background: rgba(88, 104, 191, 0.5);
+        }
+        .qrcode {
+            padding: 16px;
+            margin-bottom: 30px;
+        }
+        .qrcode img {
+            margin: 0 auto;
+            box-shadow: 0 0 10px rgba(67, 67, 68, 0.25);
+            padding: 4px;
+        }
     </style>
 </head>
 <body>
-    
-<div class="form">
-  <h1>WhatsApp API QR</h1>
-  <div id="qrcode-container">
-	<img src="./assets/loader.gif" alt="loading" id="qrcode" style="width: 250px;">
-  </div>
-	<div class="card">
-		
-		<div class="body">
-			<p>
-				<li>Escanea el siguiente código QR con tu aplicación de WhatsApp</li>
-				
-        <h5 id="iduser"></h5>
-			</p>
-		</div>
-	</div>
+    <div class="form">
+        <h1>WhatsApp Multi-Session QR</h1>
+        <div>
+            <input type="text" id="session-id" placeholder="Session ID">
+            <button onclick="startSession()">Start Session</button>
+        </div>
+        <div id="qrcode-container">
+            <img src="./assets/loader.gif" alt="loading" id="qrcode" style="width: 250px;">
+        </div>
+        <div class="card">
+            <div class="body">
+                <p>
+                    <li>Escanea el siguiente código QR con tu aplicación de WhatsApp</li>
+                    <h5 id="iduser"></h5>
+                </p>
+            </div>
+        </div>
+        <div>
+            <select id="session-select"></select>
+            <button onclick="checkStatus()">Check Status</button>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.3/socket.io.js" crossorigin="anonymous"></script>
+    <script>
+    const qrcode = document.getElementById("qrcode");
+    const iduser = document.getElementById("iduser");
+    const sessionSelect = document.getElementById("session-select");
+    const socket = io();
 
-</div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.3/socket.io.js" crossorigin="anonymous"></script>
-		<script>
-		
-			const qrcode=document.getElementById("qrcode");
-      const  iduser = document.getElementById("iduser");
+    // Función para agregar sesiones al select
+    function addSessionOption(sessionId, user) {
+        const option = document.createElement("option");
+        option.value = sessionId;
+        option.textContent = `${sessionId} - ${user.id}`;
+        sessionSelect.appendChild(option);
+    }
 
-      const socket=io();
-      socket.on("qr",url =>{
-        qrcode.setAttribute("src",url)
-      })
+    // Evento para recibir la lista de sesiones desde el servidor
+    socket.on("sessions", (sessions) => {
+        sessions.forEach(({ sessionId, user }) => {
+            addSessionOption(sessionId, user);
+        });
+    });
 
-      socket.on("qrstatus",src =>{
-        qrcode.setAttribute("src",src)
-      })
+    socket.on("qr", ({ sessionId, url }) => {
+        if (sessionSelect.value === sessionId) {
+            qrcode.setAttribute("src", url);
+        }
+    });
 
-      socket.on("user",user =>{
-        iduser.innerHTML=user
-      })
+    socket.on("qrstatus", ({ sessionId, status }) => {
+        if (sessionSelect.value === sessionId) {
+            qrcode.setAttribute("src", status);
+        }
+    });
 
+    socket.on("user", ({ sessionId, user }) => {
+        if (sessionSelect.value === sessionId) {
+            iduser.innerHTML = user;
+        }
+    });
 
-		</script>
+    socket.on("log", (message) => {
+        console.log(message);
+    });
+
+    function startSession() {
+        const sessionId = document.getElementById("session-id").value.trim();
+        if (sessionId) {
+            socket.emit("start-session", sessionId);
+            sessionSelect.innerHTML += `<option value="${sessionId}">${sessionId}</option>`;
+            sessionSelect.value = sessionId;
+        }
+    }
+
+    function checkStatus() {
+        const sessionId = sessionSelect.value;
+        if (sessionId) {
+            socket.emit("check-status", sessionId);
+        }
+    }
+</script>
 </body>
 </html>
