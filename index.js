@@ -50,7 +50,15 @@ function loadSessionsFromFile() {
 }
 
 function saveSessionsToFile() {
-    fs.writeFileSync('sessions.json', JSON.stringify(sessions, null, 2), 'utf8');
+    const sessionsToSave = {};
+    for (const sessionId in sessions) {
+        if (sessions.hasOwnProperty(sessionId)) {
+            const { user } = sessions[sessionId];
+            const { id, lid } = user;
+            sessionsToSave[sessionId] = { user: { id, lid } };
+        }
+    }
+    fs.writeFileSync('sessions.json', JSON.stringify(sessionsToSave, null, 2), 'utf8');
 }
 
 const connectToWhatsApp = async (sessionId) => {
@@ -80,19 +88,15 @@ const connectToWhatsApp = async (sessionId) => {
             } else if (connection === 'open') {
                 console.log(`Connection open for session: ${sessionId}`);
                 updateQR('connected', sessionId);
-                sessions[sessionId] = { user: sock.user };
+                const { id, lid } = sock.user; // Extrae solo 'id' y 'lid'
+                sessions[sessionId] = { user: { id, lid } };
                 saveSessionsToFile();
-            }
-        });
-
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type === 'notify') {
-                //console.log('Mensaje entrante recibido');
+                // Emitir evento 'user' con el ID del usuario
+                io.emit('user', { sessionId, user: { id, lid } });
             }
         });
 
         sock.ev.on('creds.update', saveCreds);
-
         socks[sessionId] = sock;
     } catch (error) {
         console.error('Error connecting to WhatsApp:', error);
@@ -138,29 +142,46 @@ app.post('/send-message', async (req, res) => {
             return;
         }
 
-        console.log('1');
-        console.log(contactId);
-        console.log('2');
-        console.log(messageOptions);
+        console.log('Mensaje enviado por: '+contactId);
         await socks[sessionId].sendMessage(contactId, messageOptions)
             .catch(error => {
-                console.error('Error sending message:', error);
+                console.error('Error enviando message:', error);
                 throw error;
             });
         
-        res.status(200).json({ status: 'success', message: 'Mensaje enviado correctamente' });
+        res.status(200).json({ status: 'exitoso', message: 'Mensaje enviado correctamente!' });
     } catch (error) {
         console.error('Error procesando la solicitud:', error);
         res.status(500).json({ status: 'error', message: 'Error procesando la solicitud' });
     }
 });
 
+app.post('/delete-session', async (req, res) => {
+    const { sessionId } = req.body;
+    if (sessions[sessionId]) {
+        //1. Eliminar el socket de la sesión y cerrar la conexión
+        const sock = sessions[sessionId].sock;
+        if (sock) {
+            sock.logout();
+        }
+
+        //2. Eliminar la sesión del archivo json
+        delete sessions[sessionId];
+        saveSessionsToFile();
+
+        //3. Eliminar la carpeta con la información de la sesión
+        const sessionDir = `./session_auth_info_${sessionId}`;
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+
+        res.status(200).send({ message: 'Session deleted successfully' });
+    } else {
+        res.status(400).send({ message: 'Session not found' });
+    }
+});
+
 io.on('connection', (socket) => {
     // Enviar sesiones existentes al cliente
-    socket.emit('sessions', Object.keys(sessions).map(sessionId => ({
-        sessionId,
-        user: sessions[sessionId]?.user
-    })));
+    socket.emit('sessions', Object.keys(sessions).map(sessionId => ({sessionId, user: sessions[sessionId]?.user})));
 
     socket.on('start-session', (sessionId) => {
         if (!sessions[sessionId]) {
@@ -197,9 +218,9 @@ const updateQR = (data, sessionId) => {
     } else if (data === 'connected') {
         io.emit('qrstatus', { sessionId, status: './assets/check.svg' });
         io.emit('log', `Usuario conectado en la sesión ${sessionId}`);
-        const { id, name } = sessions[sessionId]?.user || {};
-        if (id && name) {
-            io.emit('user', { sessionId, user: `${id} ${name}` });
+        const { id } = sessions[sessionId]?.user || {};
+        if (id) {
+            io.emit('user', { sessionId, user: id });
         } else {
             io.emit('user', { sessionId, user: 'Unknown User' });
         }

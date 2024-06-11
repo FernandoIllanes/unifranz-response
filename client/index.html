@@ -27,8 +27,7 @@
             margin: -16px -16px 16px -16px;
             font-size: 25px;
         }
-        .form input[type="text"],
-        .form input[type="url"] {
+        .form input[type="text"] {
             box-sizing: border-box;
             width: 100%;
             background: #fff;
@@ -54,7 +53,7 @@
             border-left-style: none;
             color: #fff;
             cursor: pointer;
-          }
+        }
         .form button:hover {
             background: rgba(88, 104, 191, 0.5);
         }
@@ -83,19 +82,20 @@
             <div class="body">
                 <p>
                     <li>Escanea el siguiente código QR con tu aplicación de WhatsApp</li>
-                    <h5 id="iduser"></h5>
+                    <h5 id="session-name"></h5>
                 </p>
             </div>
         </div>
         <div>
             <select id="session-select"></select>
-            <button onclick="checkStatus()">Check Status</button>
+            <button onclick="checkStatus()">Revisar Estatus</button>
+            <button onclick="deleteSession()">Eliminar Sesión</button>
         </div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.1.3/socket.io.js" crossorigin="anonymous"></script>
     <script>
     const qrcode = document.getElementById("qrcode");
-    const iduser = document.getElementById("iduser");
+    const sessionName = document.getElementById("session-name");
     const sessionSelect = document.getElementById("session-select");
     const socket = io();
 
@@ -103,12 +103,13 @@
     function addSessionOption(sessionId, user) {
         const option = document.createElement("option");
         option.value = sessionId;
-        option.textContent = `${sessionId} - ${user.id}`;
+        option.textContent = sessionId; // Mostrar el nombre de la sesión
         sessionSelect.appendChild(option);
     }
 
     // Evento para recibir la lista de sesiones desde el servidor
     socket.on("sessions", (sessions) => {
+        sessionSelect.innerHTML = ""; // Limpiar las opciones existentes
         sessions.forEach(({ sessionId, user }) => {
             addSessionOption(sessionId, user);
         });
@@ -128,7 +129,7 @@
 
     socket.on("user", ({ sessionId, user }) => {
         if (sessionSelect.value === sessionId) {
-            iduser.innerHTML = user;
+            sessionName.innerHTML = `Session ID: ${sessionId} - User ID: ${user.id}`; // Mostrar el ID del usuario y el nombre de la sesión
         }
     });
 
@@ -142,6 +143,7 @@
             socket.emit("start-session", sessionId);
             sessionSelect.innerHTML += `<option value="${sessionId}">${sessionId}</option>`;
             sessionSelect.value = sessionId;
+            sessionName.innerHTML = `Session ID: ${sessionId}`; // Actualizar el nombre de la sesión
         }
     }
 
@@ -151,6 +153,30 @@
             socket.emit("check-status", sessionId);
         }
     }
-</script>
+
+    function deleteSession() {
+        const sessionId = sessionSelect.value;
+        if (sessionId) {
+            fetch('/delete-session', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ sessionId })
+            }).then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    alert(data.message);
+                    const option = sessionSelect.querySelector(`option[value="${sessionId}"]`);
+                    if (option) {
+                        option.remove();
+                    }
+                    sessionName.innerHTML = ""; // Limpiar el nombre de la sesión
+                    qrcode.setAttribute("src", "./assets/loader.gif"); // Resetear la imagen del QR
+                }
+            }).catch(error => console.error('Error:', error));
+        }
+    }
+    </script>
 </body>
 </html>
