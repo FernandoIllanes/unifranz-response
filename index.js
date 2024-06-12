@@ -3,6 +3,7 @@ const {
     DisconnectReason,
     useMultiFileAuthState,
 } = require('@whiskeysockets/baileys');
+const { exec } = require('child_process');
 
 const fs = require('fs');
 const pino = require('pino');
@@ -76,17 +77,17 @@ const connectToWhatsApp = async (sessionId) => {
             qrCodes[sessionId] = qr;
             if (connection === 'close') {
                 let reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-                console.log(`Connection closed, reconnecting due to reason: ${reason}`);
+                console.log(`Conexión cerrada, reconectando debido a la razón: ${reason}`);
                 if (reason === DisconnectReason.badSession) {
                     console.log(`Bad Session File, Please Delete session_auth_info_${sessionId} and Scan Again`);
                     sock.logout();
                 } else if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.connectionReplaced, DisconnectReason.loggedOut, DisconnectReason.restartRequired, DisconnectReason.timedOut].includes(reason)) {
                     await connectToWhatsApp(sessionId);
                 } else {
-                    console.log(`Unknown disconnect reason: ${reason}`);
+                    console.log(`Desconexión desconocida: ${reason}`);
                 }
             } else if (connection === 'open') {
-                console.log(`Connection open for session: ${sessionId}`);
+                console.log(`Conexión abierta para la sesión: ${sessionId}`);
                 updateQR('connected', sessionId);
                 const { id, lid } = sock.user; // Extrae solo 'id' y 'lid'
                 sessions[sessionId] = { user: { id, lid } };
@@ -162,7 +163,8 @@ app.post('/delete-session', async (req, res) => {
         //1. Eliminar el socket de la sesión y cerrar la conexión
         const sock = sessions[sessionId].sock;
         if (sock) {
-            sock.logout();
+            await sock.logout();
+            delete socks[sessionId];
         }
 
         //2. Eliminar la sesión del archivo json
@@ -173,9 +175,22 @@ app.post('/delete-session', async (req, res) => {
         const sessionDir = `./session_auth_info_${sessionId}`;
         fs.rmSync(sessionDir, { recursive: true, force: true });
 
-        res.status(200).send({ message: 'Session deleted successfully' });
+        res.status(200).send({ message: 'Sesión eliminada exitosamente' });
+
+         // 4. Reiniciar la aplicación
+         exec('pm2 restart unifranz-response', (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Error reiniciando la aplicación: ${error.message}`);
+                return;
+            }
+            if (stderr) {
+                console.error(`Error en stderr: ${stderr}`);
+                return;
+            }
+            console.log(`stdout: ${stdout}`);
+        });
     } else {
-        res.status(400).send({ message: 'Session not found' });
+        res.status(400).send({ message: 'Sesión no encontrada' });
     }
 });
 
