@@ -77,14 +77,14 @@ const connectToWhatsApp = async (sessionId) => {
             qrCodes[sessionId] = qr;
             if (connection === 'close') {
                 let reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
-                console.log(`Conexión cerrada, reconectando debido a la razón: ${reason}`);
+                console.log(`Conexión cerrada, reconectando con el error: ${reason}`);
                 if (reason === DisconnectReason.badSession) {
                     console.log(`Bad Session File, Please Delete session_auth_info_${sessionId} and Scan Again`);
                     sock.logout();
                 } else if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.connectionReplaced, DisconnectReason.loggedOut, DisconnectReason.restartRequired, DisconnectReason.timedOut].includes(reason)) {
                     await connectToWhatsApp(sessionId);
                 } else {
-                    console.log(`Desconexión desconocida: ${reason}`);
+                    console.log(`Desconexión no reconocida por razón: ${reason}`);
                 }
             } else if (connection === 'open') {
                 console.log(`Conexión abierta para la sesión: ${sessionId}`);
