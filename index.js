@@ -4,6 +4,24 @@ const {
     useMultiFileAuthState,
 } = require('@whiskeysockets/baileys');
 const { exec } = require('child_process');
+const mysql = require('mysql');
+const dotenv = require('dotenv');
+dotenv.config();
+
+const db = mysql.createConnection({
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_DATABASE
+});
+
+db.connect((err) => {
+    if (err) {
+        console.error('Error connecting to the database:', err);
+        return;
+    }
+    console.log('Connected to the database');
+});
 
 const fs = require('fs');
 const pino = require('pino');
@@ -35,35 +53,107 @@ app.get('/', (req, res) => {
     res.send('server working');
 });
 
-// Cargar sesiones desde el archivo
-let sessions = loadSessionsFromFile(); // Almacenar las sesiones
+let sessions = {}; // Inicializamos como objeto vacío
 let qrCodes = {}; // Almacenar los QR dinámicos
 let socks = {};
 
-function loadSessionsFromFile() {
+async function startServer() {
     try {
-        const data = fs.readFileSync('sessions.json', 'utf8');
-        return JSON.parse(data);
+        await loadSessionsFromDB();
+        server.listen(port, async () => {
+            console.log(`Servidor escuchando en http://localhost:${port}`);
+            await startAllSessions();
+        });
     } catch (error) {
-        console.error('Error loading sessions from file:', error);
-        return {};
+        console.error('Error starting server:', error);
     }
 }
 
-function saveSessionsToFile() {
-    const sessionsToSave = {};
-    for (const sessionId in sessions) {
-        if (sessions.hasOwnProperty(sessionId)) {
-            const { user } = sessions[sessionId];
-            const { id, lid } = user;
-            sessionsToSave[sessionId] = { user: { id, lid } };
+async function loadSessionsFromDB() {
+    return new Promise((resolve, reject) => {
+        db.query('SELECT * FROM sessions', (err, results) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+            sessions = {};
+            results.forEach(row => {
+                sessions[row.session_id] = { user: { id: row.user_id, lid: row.user_lid } };
+            });
+            console.log('Sessions loaded from database');
+            resolve();
+        });
+    });
+}
+
+function saveSessionToDB(sessionId, user) {
+    const { id, lid } = user;
+    db.query('REPLACE INTO sessions (session_id, user_id, user_lid) VALUES (?, ?, ?)', [sessionId, id, lid], (err) => {
+        if (err) {
+            console.error('Error saving session to database:', err);
+        } else {
+            console.log(`Session ${sessionId} saved to database`);
         }
-    }
-    fs.writeFileSync('sessions.json', JSON.stringify(sessionsToSave, null, 2), 'utf8');
+    });
 }
 
-const connectToWhatsApp = async (sessionId) => {
+function deleteSessionFromDB(sessionId) {
+    db.query('DELETE FROM sessions WHERE session_id = ?', [sessionId], (err) => {
+        if (err) {
+            console.error('Error deleting session from database:', err);
+        } else {
+            console.log(`Session ${sessionId} deleted from database`);
+        }
+    });
+}
+
+function saveSessionFilesToDB(sessionId) {
+    const sessionDir = `./session_auth_info_${sessionId}`;
+    const files = fs.readdirSync(sessionDir);
+
+    files.forEach(file => {
+        const filePath = `${sessionDir}/${file}`;
+        const fileData = fs.readFileSync(filePath);
+        db.query('REPLACE INTO session_files (session_id, file_name, file_data) VALUES (?, ?, ?)', [sessionId, file, fileData], (err) => {
+            if (err) {
+                console.error('Error saving session file to database:', err);
+            } else {
+                console.log(`File ${file} from session ${sessionId} saved to database`);
+            }
+        });
+    });
+
+    // Borrar archivos locales después de guardarlos en la base de datos
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+}
+
+function loadSessionFilesFromDB(sessionId) {
+    const sessionDir = `./session_auth_info_${sessionId}`;
+    if (!fs.existsSync(sessionDir)) {
+        fs.mkdirSync(sessionDir, { recursive: true });
+    }
+
+    return new Promise((resolve, reject) => {
+        db.query('SELECT * FROM session_files WHERE session_id = ?', [sessionId], (err, results) => {
+            if (err) {
+                reject(err);
+                return;
+            }
+
+            results.forEach(row => {
+                const filePath = `${sessionDir}/${row.file_name}`;
+                fs.writeFileSync(filePath, row.file_data);
+            });
+
+            console.log(`Files for session ${sessionId} loaded from database`);
+            resolve();
+        });
+    });
+}
+
+async function connectToWhatsApp(sessionId) {
     try {
+        await loadSessionFilesFromDB(sessionId);
         const { state, saveCreds } = await useMultiFileAuthState(`session_auth_info_${sessionId}`);
         const sock = makeWASocket({
             auth: state,
@@ -89,11 +179,11 @@ const connectToWhatsApp = async (sessionId) => {
             } else if (connection === 'open') {
                 console.log(`Conexión abierta para la sesión: ${sessionId}`);
                 updateQR('connected', sessionId);
-                const { id, lid } = sock.user; // Extrae solo 'id' y 'lid'
+                const { id, lid } = sock.user;
                 sessions[sessionId] = { user: { id, lid } };
-                saveSessionsToFile();
-                // Emitir evento 'user' con el ID del usuario
+                saveSessionToDB(sessionId, { id, lid });
                 io.emit('user', { sessionId, user: { id, lid } });
+                saveSessionFilesToDB(sessionId);
             }
         });
 
@@ -102,7 +192,7 @@ const connectToWhatsApp = async (sessionId) => {
     } catch (error) {
         console.error('Error connecting to WhatsApp:', error);
     }
-};
+}
 
 const isConnected = (sessionId) => {
     return !!sessions[sessionId]?.user;
@@ -160,35 +250,24 @@ app.post('/send-message', async (req, res) => {
 app.post('/delete-session', async (req, res) => {
     const { sessionId } = req.body;
     if (sessions[sessionId]) {
-        //1. Eliminar el socket de la sesión y cerrar la conexión
-        const sock = sessions[sessionId].sock;
+        const sock = socks[sessionId];
         if (sock) {
             await sock.logout();
             delete socks[sessionId];
         }
 
-        //2. Eliminar la sesión del archivo json
         delete sessions[sessionId];
-        saveSessionsToFile();
+        deleteSessionFromDB(sessionId);
 
-        //3. Eliminar la carpeta con la información de la sesión
-        const sessionDir = `./session_auth_info_${sessionId}`;
-        fs.rmSync(sessionDir, { recursive: true, force: true });
+        db.query('DELETE FROM session_files WHERE session_id = ?', [sessionId], (err) => {
+            if (err) {
+                console.error('Error deleting session files from database:', err);
+            } else {
+                console.log(`Files for session ${sessionId} deleted from database`);
+            }
+        });
 
         res.status(200).send({ message: 'Sesión eliminada exitosamente' });
-
-         // 4. Reiniciar la aplicación
-         exec('pm2 restart unifranz-response', (error, stdout, stderr) => {
-            if (error) {
-                console.error(`Error reiniciando la aplicación: ${error.message}`);
-                return;
-            }
-            if (stderr) {
-                console.error(`Error en stderr: ${stderr}`);
-                return;
-            }
-            console.log(`stdout: ${stdout}`);
-        });
     } else {
         res.status(400).send({ message: 'Sesión no encontrada' });
     }
@@ -246,15 +325,21 @@ const updateQR = (data, sessionId) => {
 };
 
 const startAllSessions = async () => {
+    await loadSessionsFromDB();
     for (const sessionId of Object.keys(sessions)) {
         await connectToWhatsApp(sessionId);
     }
 };
 
-server.listen(port, async () => {
-    console.log(`Servidor escuchando en http://localhost:${port}`);
-    await startAllSessions();
-});
+async function main() {
+    try {
+        await startServer();
+    } catch (error) {
+        console.error('Error starting server:', error);
+    }
+}
+
+main();
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
