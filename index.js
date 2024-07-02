@@ -1,11 +1,24 @@
 const {
     default: makeWASocket,
     DisconnectReason,
-    useMultiFileAuthState,
+    useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
+
 const { exec } = require('child_process');
 const mysql = require('mysql');
 const dotenv = require('dotenv');
+const axios = require('axios');
+const fs = require('fs');
+const pino = require('pino');
+const { Boom } = require('@hapi/boom');
+const express = require('express');
+const fileUpload = require('express-fileupload');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+const http = require('http');
+const qrcode = require('qrcode');
+const socketIO = require('socket.io');
+
 dotenv.config();
 
 const db = mysql.createConnection({
@@ -22,17 +35,6 @@ db.connect((err) => {
     }
     console.log('Connected to the database');
 });
-
-const fs = require('fs');
-const pino = require('pino');
-const { Boom } = require('@hapi/boom');
-const express = require('express');
-const fileUpload = require('express-fileupload');
-const cors = require('cors');
-const bodyParser = require('body-parser');
-const http = require('http');
-const qrcode = require('qrcode');
-const socketIO = require('socket.io');
 
 const app = express();
 app.use(fileUpload({ createParentPath: true }));
@@ -107,53 +109,8 @@ function deleteSessionFromDB(sessionId) {
     });
 }
 
-function saveSessionFilesToDB(sessionId) {
-    const sessionDir = `./session_auth_info_${sessionId}`;
-    const files = fs.readdirSync(sessionDir);
-
-    files.forEach(file => {
-        const filePath = `${sessionDir}/${file}`;
-        const fileData = fs.readFileSync(filePath);
-        db.query('REPLACE INTO session_files (session_id, file_name, file_data) VALUES (?, ?, ?)', [sessionId, file, fileData], (err) => {
-            if (err) {
-                console.error('Error saving session file to database:', err);
-            } else {
-                console.log(`File ${file} from session ${sessionId} saved to database`);
-            }
-        });
-    });
-
-    // Borrar archivos locales después de guardarlos en la base de datos
-    fs.rmSync(sessionDir, { recursive: true, force: true });
-}
-
-function loadSessionFilesFromDB(sessionId) {
-    const sessionDir = `./session_auth_info_${sessionId}`;
-    if (!fs.existsSync(sessionDir)) {
-        fs.mkdirSync(sessionDir, { recursive: true });
-    }
-
-    return new Promise((resolve, reject) => {
-        db.query('SELECT * FROM session_files WHERE session_id = ?', [sessionId], (err, results) => {
-            if (err) {
-                reject(err);
-                return;
-            }
-
-            results.forEach(row => {
-                const filePath = `${sessionDir}/${row.file_name}`;
-                fs.writeFileSync(filePath, row.file_data);
-            });
-
-            console.log(`Files for session ${sessionId} loaded from database`);
-            resolve();
-        });
-    });
-}
-
 async function connectToWhatsApp(sessionId) {
     try {
-        await loadSessionFilesFromDB(sessionId);
         const { state, saveCreds } = await useMultiFileAuthState(`session_auth_info_${sessionId}`);
         const sock = makeWASocket({
             auth: state,
@@ -183,7 +140,6 @@ async function connectToWhatsApp(sessionId) {
                 sessions[sessionId] = { user: { id, lid } };
                 saveSessionToDB(sessionId, { id, lid });
                 io.emit('user', { sessionId, user: { id, lid } });
-                saveSessionFilesToDB(sessionId);
             }
         });
 
@@ -202,11 +158,37 @@ function buildMessageTemplate(template, data) {
     return template.replace(/{(\w+)}/g, (_, key) => data[key] || '');
 }
 
+async function startAllSessions() {
+    for (const sessionId of Object.keys(sessions)) {
+        await connectToWhatsApp(sessionId);
+    }
+}
+
+async function sendImageFromUrl(sock, sessionId, contactId, imageUrl, caption) {
+    try {
+        // Descargar la imagen desde la URL
+        const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(response.data, 'binary');
+
+        // Enviar la imagen usando sendMessage de sock
+        await sock.sendMessage(contactId, {
+            image: buffer,
+            caption: caption
+        });
+
+        console.log('Imagen enviada desde URL');
+    } catch (error) {
+        console.error('Error al enviar la imagen desde URL:', error);
+        throw error; // Re-lanza el error para manejarlo en otro lugar si es necesario
+    }
+}
+
 app.post('/send-message', async (req, res) => {
     try {
         const reqData = req.body;
         const sessionId = reqData.session_id;
         let contactId;
+
         if (!socks[sessionId]) {
             await connectToWhatsApp(sessionId);
         }
@@ -222,28 +204,20 @@ app.post('/send-message', async (req, res) => {
             contactId = reqData.contact_id.replace(/\+/g, '') + '@s.whatsapp.net';
         }
 
-        let messageOptions;
         if (reqData.message_type === 'static') {
-            messageOptions = { text: reqData.message };
-        } else if (reqData.message_type === 'customized') {
-            const message = buildMessageTemplate(reqData.message_template, reqData);
-            messageOptions = { text: message };
+            //Enviar mensaje de texto estático
+            await socks[sessionId].sendMessage(contactId, { text: reqData.message });
+            res.status(200).json({ status: 'success', message: 'Mensaje enviado correctamente' });
+        } else if (reqData.message_type === 'image') {
+            //Enviar imagen desde URL
+            await sendImageFromUrl(socks[sessionId], sessionId, contactId, reqData.image_url, reqData.caption);
+            res.status(200).json({ status: 'success', message: 'Imagen enviada desde URL' });
         } else {
             res.status(400).json({ status: 'error', message: 'Tipo de mensaje no válido' });
-            return;
         }
-
-        console.log('Mensaje enviado por: '+contactId);
-        await socks[sessionId].sendMessage(contactId, messageOptions)
-            .catch(error => {
-                console.error('Error enviando message:', error);
-                throw error;
-            });
-        
-        res.status(200).json({ status: 'exitoso', message: 'Mensaje enviado correctamente!' });
     } catch (error) {
-        console.error('Error procesando la solicitud:', error);
-        res.status(500).json({ status: 'error', message: 'Error procesando la solicitud' });
+        console.error('Error al enviar mensaje:', error);
+        res.status(500).json({ status: 'error', message: 'Error al enviar mensaje' });
     }
 });
 
@@ -258,14 +232,6 @@ app.post('/delete-session', async (req, res) => {
 
         delete sessions[sessionId];
         deleteSessionFromDB(sessionId);
-
-        db.query('DELETE FROM session_files WHERE session_id = ?', [sessionId], (err) => {
-            if (err) {
-                console.error('Error deleting session files from database:', err);
-            } else {
-                console.log(`Files for session ${sessionId} deleted from database`);
-            }
-        });
 
         res.status(200).send({ message: 'Sesión eliminada exitosamente' });
     } else {
@@ -303,7 +269,7 @@ io.on('connection', (socket) => {
     });
 });
 
-const updateQR = (data, sessionId) => {
+function updateQR(data, sessionId) {
     if (data === 'qr') {
         qrcode.toDataURL(qrCodes[sessionId], (err, url) => {
             io.emit('qr', { sessionId, url });
@@ -322,29 +288,6 @@ const updateQR = (data, sessionId) => {
         io.emit('qrstatus', { sessionId, status: './assets/loader.gif' });
         io.emit('log', `Cargando sesión ${sessionId}...`);
     }
-};
-
-const startAllSessions = async () => {
-    await loadSessionsFromDB();
-    for (const sessionId of Object.keys(sessions)) {
-        await connectToWhatsApp(sessionId);
-    }
-};
-
-async function main() {
-    try {
-        await startServer();
-    } catch (error) {
-        console.error('Error starting server:', error);
-    }
 }
 
-main();
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception thrown:', error);
-});
+startServer();
