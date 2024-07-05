@@ -237,9 +237,9 @@ app.post('/send-bulk-messages', async (req, res) => {
         //Convertir el contenido del archivo Excel en un array
         const contacts = XLSX.utils.sheet_to_json(worksheet);
 
-        contacts.forEach(async function (contact) {
+        for (let i = 0; i < contacts.length; i++) {
+            const contact = contacts[i];
             console.log(contact);
-
             let contactId;
 
             if (contact.contact_type === 'group') {
@@ -248,10 +248,11 @@ app.post('/send-bulk-messages', async (req, res) => {
                 contactId = contact.number.toString().replace(/\+/g, '') + '@s.whatsapp.net';
             }
 
-            await new Promise(resolve => setTimeout(resolve, 10000));
             socks[session_id].sendMessage(contactId, { text: message });
             console.log("Mensaje enviado a " + contact.number);
-        });
+
+            await new Promise(resolve => setTimeout(resolve, 10000));
+        };
 
         res.status(200).json({ status: 'success', message: 'Mensajes enviados desde Excel' });
     } catch (error) {
