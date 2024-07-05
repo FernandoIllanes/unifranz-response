@@ -226,35 +226,33 @@ app.post('/send-message', async (req, res) => {
     }
 });
 
-app.post('/send-messages-from-excel', async (req, res) => {
+app.post('/send-bulk-messages', async (req, res) => {
     try {
-        const { filePath, session_id, contact_type, contact_id } = req.body;
+        const { filePath, session_id, message } = req.body;
 
         const workbook = XLSX.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
 
         //Convertir el contenido del archivo Excel en un array
-        const messages = XLSX.utils.sheet_to_json(worksheet);
+        const contacts = XLSX.utils.sheet_to_json(worksheet);
 
-        for (let i = 0; i < messages.length; i++) {
-            const messageData = messages[i];
+        contacts.forEach(async function (contact) {
+            console.log(contact);
 
-            //Enviar mensaje usando el /send-message
-            const sendMessageReq = {
-                session_id: session_id,
-                contact_type: contact_type,
-                contact_id: contact_id,
-                message_type: 'static',
-                message: `${messageData['contact_type']} ${messageData['number']}`
-            };
+            let contactId;
 
-            //Hacer la solicitud POST a /send-message
-            await axios.post('http://localhost:5000/send-message', sendMessageReq);
-            
+            if (contact.contact_type === 'group') {
+                contactId = contact.number + '@g.us';
+            } else if (contact.contact_type === 'contact') {
+                contactId = contact.number.replace(/\+/g, '') + '@s.whatsapp.net';
+            }
+
+            await socks[session_id].sendMessage(contactId, { text: message });
+
             //Esperar 3 segundos
             await new Promise(resolve => setTimeout(resolve, 3000));
-        }
+        });
 
         res.status(200).json({ status: 'success', message: 'Mensajes enviados desde Excel' });
     } catch (error) {
@@ -286,7 +284,7 @@ app.post('/delete-session', async (req, res) => {
 
 io.on('connection', (socket) => {
     // Enviar sesiones existentes al cliente
-    socket.emit('sessions', Object.keys(sessions).map(sessionId => ({sessionId, user: sessions[sessionId]?.user})));
+    socket.emit('sessions', Object.keys(sessions).map(sessionId => ({ sessionId, user: sessions[sessionId]?.user })));
 
     socket.on('start-session', (sessionId) => {
         if (!sessions[sessionId]) {
