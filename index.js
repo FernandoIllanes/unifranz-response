@@ -259,6 +259,27 @@ app.post('/send-messages-from-excel', async (req, res) => {
     }
 });
 
+app.post('/delete-session', async (req, res) => {
+    const { sessionId } = req.body;
+    if (sessions[sessionId]) {
+        const sock = socks[sessionId];
+        if (sock) {
+            await sock.logout();
+            delete socks[sessionId];
+        }
+
+        delete sessions[sessionId];
+        try {
+            await deleteSessionFromDB(sessionId);
+            res.status(200).send({ message: 'Sesión eliminada exitosamente' });
+        } catch (error) {
+            res.status(500).send({ message: 'Error al eliminar la sesión' });
+        }
+    } else {
+        res.status(400).send({ message: 'Sesión no encontrada' });
+    }
+});
+
 io.on('connection', (socket) => {
     // Enviar sesiones existentes al cliente
     socket.emit('sessions', Object.keys(sessions).map(sessionId => ({sessionId, user: sessions[sessionId]?.user})));
