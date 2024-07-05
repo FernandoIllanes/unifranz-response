@@ -165,22 +165,20 @@ async function startAllSessions() {
     }
 }
 
-async function sendImageFromUrl(sock, sessionId, contactId, imageUrl, caption) {
+async function sendImageFromUrl(sock, sessionId, contactId, imageUrl, message) {
     try {
-        // Descargar la imagen desde la URL
         const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data, 'binary');
 
-        // Enviar la imagen usando sendMessage de sock
         await sock.sendMessage(contactId, {
             image: buffer,
-            caption: caption
+            caption: message
         });
 
         console.log('Imagen enviada desde URL');
     } catch (error) {
         console.error('Error al enviar la imagen desde URL:', error);
-        throw error; // Re-lanza el error para manejarlo en otro lugar si es necesario
+        throw error;
     }
 }
 
@@ -209,10 +207,16 @@ app.post('/send-message', async (req, res) => {
             //Enviar mensaje de texto estático
             await socks[sessionId].sendMessage(contactId, { text: reqData.message });
             res.status(200).json({ status: 'success', message: 'Mensaje enviado correctamente' });
-        } else if (reqData.message_type === 'image') {
-            //Enviar imagen desde URL
-            await sendImageFromUrl(socks[sessionId], sessionId, contactId, reqData.image_url, reqData.caption);
+        } else if (reqData.message_type === 'url_image') {
+            //Enviar imagen desde url
+            await sendImageFromUrl(socks[sessionId], sessionId, contactId, reqData.image_url, reqData.message);
             res.status(200).json({ status: 'success', message: 'Imagen enviada desde URL' });
+        } else if (reqData.message_type === 'url_ubicacion') {
+            //Enviar imagen desde url de ubicacion
+            res.status(200).json({ status: 'success', message: 'No implementado aún' });
+        } else if (reqData.message_type === 'url_video') {
+            //Enviar imagen desde url de video
+            res.status(200).json({ status: 'success', message: 'No implementado aún' });
         } else {
             res.status(400).json({ status: 'error', message: 'Tipo de mensaje no válido' });
         }
