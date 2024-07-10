@@ -19,6 +19,7 @@ const http = require('http');
 const qrcode = require('qrcode');
 const socketIO = require('socket.io');
 const XLSX = require('xlsx'); // Librería para manejar archivos Excel
+const path = require('path');
 
 dotenv.config();
 
@@ -50,6 +51,10 @@ const port = process.env.PORT || 5000;
 
 app.get('/scan', (req, res) => {
     res.sendFile('./client/index.html', { root: __dirname });
+});
+
+app.get('/bulk-message', (req, res) => {
+    res.sendFile('./client/bulk-message.html', { root: __dirname });
 });
 
 app.get('/', (req, res) => {
@@ -228,32 +233,57 @@ app.post('/send-message', async (req, res) => {
 
 app.post('/send-bulk-messages', async (req, res) => {
     try {
-        const { filePath, session_id, message } = req.body;
+        const { session_id, message } = req.body;
 
-        const workbook = XLSX.readFile(filePath);
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
+        // Verificar que se haya subido un archivo
+        if (!req.files || Object.keys(req.files).length === 0) {
+            return res.status(400).send('No files were uploaded.');
+        }
 
-        //Convertir el contenido del archivo Excel en un array
-        const contacts = XLSX.utils.sheet_to_json(worksheet);
+        const file = req.files.file;
+        const dir = path.join(__dirname, 'uploads', session_id);
 
-        for (let i = 0; i < contacts.length; i++) {
-            const contact = contacts[i];
-            let contactId;
+        // Crear la carpeta si no existe
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
 
-            if (contact.contact_type === 'group') {
-                contactId = contact.number + '@g.us';
-            } else if (contact.contact_type === 'contact') {
-                contactId = contact.number.toString().replace(/\+/g, '') + '@s.whatsapp.net';
+        const filePath = path.join(dir, file.name);
+
+        // Mover el archivo a la carpeta específica
+        file.mv(filePath, async (err) => {
+            if (err) {
+                return res.status(500).send(err);
             }
 
-            socks[session_id].sendMessage(contactId, { text: message });
-            console.log("Mensaje enviado a " + contact.number);
+            const workbook = XLSX.readFile(filePath);
+            const sheetName = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[sheetName];
+            const contacts = XLSX.utils.sheet_to_json(worksheet);
 
-            await new Promise(resolve => setTimeout(resolve, 15000));
-        };
+            // Obtener el socket para la sesión actual
+            const sock = socks[session_id];
 
-        res.status(200).json({ status: 'success', message: 'Mensajes enviados desde Excel' });
+            for (let i = 0; i < contacts.length; i++) {
+                const contact = contacts[i];
+                let contactId;
+
+                if (contact.contact_type === 'group') {
+                    contactId = contact.number + '@g.us';
+                } else if (contact.contact_type === 'contact') {
+                    contactId = contact.number.toString().replace(/\+/g, '') + '@s.whatsapp.net';
+                }
+
+                // Enviar mensaje al contacto
+                await sock.sendMessage(contactId, { text: message });
+                console.log("Mensaje enviado a " + contact.number);
+
+                // Esperar 15 segundos antes de enviar el siguiente mensaje
+                await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+
+            res.status(200).json({ status: 'success', message: 'Mensajes enviados desde Excel' });
+        });
     } catch (error) {
         console.error('Error al enviar mensajes desde Excel:', error);
         res.status(500).json({ status: 'error', message: 'Error al enviar mensajes desde Excel' });

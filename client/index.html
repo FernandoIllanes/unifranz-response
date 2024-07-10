@@ -129,7 +129,7 @@
 
     socket.on("user", ({ sessionId, user }) => {
         if (sessionSelect.value === sessionId) {
-            sessionName.innerHTML = `Session ID: ${sessionId} - User ID: ${user.id}`; // Mostrar el ID del usuario y el nombre de la sesión
+            sessionName.innerHTML = `Session ID correcto: ${sessionId}`; // Mostrar el ID del usuario
         }
     });
 
