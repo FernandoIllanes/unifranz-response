@@ -115,7 +115,7 @@
         formData.append("message", message); // Adjuntar el mensaje
 
         // Realizar la solicitud POST al servidor
-        fetch('http://192.168.56.1:5000/send-bulk-messages', {
+        fetch('http://149.50.141.201:5000/send-bulk-messages', {
             method: 'POST',
             body: formData // Enviar FormData que contiene el archivo y otros datos
         })
